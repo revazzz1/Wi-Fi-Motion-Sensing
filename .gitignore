@@ -1,0 +1,12 @@
+# datasets (too large for git; see README for download sources)
+CSV Files/
+UT_HAR/
+
+# kept local for now; its content goes into the report's AI-use statement
+AI_USAGE.md
+
+# OS / IDE
+.DS_Store
+.idea/
+__pycache__/
+.ipynb_checkpoints/
