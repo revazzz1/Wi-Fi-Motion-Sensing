@@ -5,7 +5,7 @@ unzipped into the project as "CSV Files/". Each magnitude CSV = one ~70 s record
 rows = packets (time), 49 columns = subcarriers, no header, no timestamps.
 
 Outputs go to figures/: fig_raw_subcarrier0.png, fig_a_heatmap.png,
-fig_b_spread_boxplot.png, table_dataset_stats.csv
+fig_b_spread_boxplot.png, table_dataset_stats.csv, table_split.csv
 """
 import glob
 import os
@@ -102,7 +102,48 @@ print("\n" + table.to_string(index=False))
 table.to_csv(f"{FIG_DIR}/table_dataset_stats.csv", index=False)
 
 
-# ---------- 4. figures ----------
+# ---------- 4. train / validation / test split ----------
+# Chronological, per class, by FILE : earliest 60% train, next 20% validation,
+# latest 20% test. Files are already sorted by their timestamp.
+
+def start_time(path):
+    """Recording start time from a filename like csi_20241204_020632_magnitude.csv."""
+    stamp = os.path.basename(path).split("_")[1:3]            # ['20241204', '020632']
+    return pd.to_datetime("_".join(stamp), format="%Y%m%d_%H%M%S")
+
+
+def split_files(files, n_train, n_val):
+    return {"train": files[:n_train],
+            "val":   files[n_train:n_train + n_val],
+            "test":  files[n_train + n_val:]}
+
+
+splits = {
+    "empty":  split_files(files["empty"],  n_train=6,  n_val=2),    # 6 / 2 / 2
+    "person": split_files(files["person"], n_train=51, n_val=17),   # 51 / 17 / 17
+}
+
+split_rows = []
+for name, parts in splits.items():
+    for part, part_files in parts.items():
+        split_rows.append({
+            "class": name,
+            "set": part,
+            "files": len(part_files),
+            f"{WIN_S}-s windows": len(part_files) * (FILE_S // WIN_S),
+            "first start": start_time(part_files[0]),
+            "last start": start_time(part_files[-1]),
+        })
+split_table = pd.DataFrame(split_rows)
+print("\n" + split_table.to_string(index=False))
+split_table.to_csv(f"{FIG_DIR}/table_split.csv", index=False)
+
+# no file may appear in two sets
+all_split = [f for parts in splits.values() for part_files in parts.values() for f in part_files]
+assert len(all_split) == len(set(all_split)) == len(files["empty"]) + len(files["person"])
+
+
+# ---------- 5. figures ----------
 
 # raw subcarrier 0 over a whole file: shows the spikes in the empty room
 fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharey=True, constrained_layout=True)
