@@ -3,8 +3,9 @@
 Data: IEEE DataPort "CSI Dataset for WiFi Based Human Detection" (DOI 10.21227/smn7-jb67),
 unzipped into the project as "CSV Files/". Each magnitude CSV = one ~70 s recording,
 rows = packets (time), 49 columns = subcarriers, no header, no timestamps.
+Only the csi_magnitude_data files are read, so CSI phase is never loaded (dropped by design).
 
-Outputs go to figures/: fig_raw_subcarrier0.png, fig_a_heatmap.png,
+Outputs go to figures/: fig_raw_subcarrier1.png, fig_a_heatmap.png,
 fig_b_spread_boxplot.png, table_dataset_stats.csv, table_split.csv
 """
 import glob
@@ -15,12 +16,14 @@ import numpy as np
 import pandas as pd
 
 DATA = "CSV Files"
+# magnitude files only: the csi_complex_data/ folders (amplitude + phase) are not used
 FOLDERS = {
     "empty":      f"{DATA}/room4_iqbal/Static_noperson_channel_11_20mhz/csi_magnitude_data",
     "person":     f"{DATA}/room4_iqbal/Dynamic_1_person_ch11_20mhz/csi_magnitude_data",
     # not used for training: only checked to decide what "Static" means (see label check below)
     "lab_static": f"{DATA}/LAB_Final Year Project/Static_Lab_ch6_20mhz/csi_magnitude_data",
 }
+DROP_SUBCARRIERS = [0, 48]   # band edges: 1.3-7x noisier than inner subcarriers in every empty file
 FILE_S = 70    # seconds between consecutive file start times (from the filenames)
 WIN_S = 2      # window length in seconds
 FIG_DIR = "figures"
@@ -34,7 +37,8 @@ def list_csv(folder):
 
 
 def load(path):
-    return pd.read_csv(path, header=None)   # no header row: the first line is data
+    df = pd.read_csv(path, header=None)       # no header row: the first line is data
+    return df.drop(columns=DROP_SUBCARRIERS)  # 49 -> 47 subcarriers (original indices kept)
 
 
 def spread(df):
@@ -145,15 +149,15 @@ assert len(all_split) == len(set(all_split)) == len(files["empty"]) + len(files[
 
 # ---------- 5. figures ----------
 
-# raw subcarrier 0 over a whole file: shows the spikes in the empty room
+# raw subcarrier 1 over a whole file: shows the spikes in the empty room
 fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharey=True, constrained_layout=True)
 for ax, name, title in zip(axes, ("empty", "person"),
                            ("room4, empty (Static_noperson)", "room4, 1 person moving (Dynamic_1_person)")):
-    ax.plot(first[name][0])
-    ax.set_title(f"{title} - subcarrier 0")
+    ax.plot(first[name][1])
+    ax.set_title(f"{title} - subcarrier 1")
     ax.set_xlabel("packet index")
     ax.set_ylabel("amplitude")
-plt.savefig(f"{FIG_DIR}/fig_raw_subcarrier0.png", dpi=150)
+plt.savefig(f"{FIG_DIR}/fig_raw_subcarrier1.png", dpi=150)
 
 # (a) one 2-s window per class, each subcarrier centred on its own median
 centred = {}
@@ -167,10 +171,10 @@ for ax, name, title in zip(axes, ("empty", "person"),
                            ("Empty room (label 0)", "One person present (label 1)")):
     c = centred[name]
     im = ax.imshow(c.T, aspect="auto", origin="lower", cmap="RdBu_r", vmin=-lim, vmax=lim,
-                   extent=[0, WIN_S, 0, c.shape[1]])
+                   extent=[0, WIN_S, 1, 48])
     ax.set_title(title)
     ax.set_xlabel("time in window (s)")
-axes[0].set_ylabel("subcarrier index")
+axes[0].set_ylabel("subcarrier index (0 and 48 dropped)")
 fig.colorbar(im, ax=axes, label="amplitude − subcarrier median")
 plt.savefig(f"{FIG_DIR}/fig_a_heatmap.png", dpi=150)
 
