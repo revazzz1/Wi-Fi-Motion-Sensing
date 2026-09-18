@@ -1,0 +1,3 @@
+class,files,phase circular variance,median phase jump (rad),magnitude IQR / median
+empty,10,0.99,1.572,0.018
+person,10,0.991,1.575,0.614
