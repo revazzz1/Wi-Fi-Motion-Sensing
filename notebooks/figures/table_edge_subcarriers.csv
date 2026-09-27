@@ -1,0 +1,5 @@
+class,subcarrier,files,files with ratio > 1,median ratio,min,max
+empty,0,10,10,2.29,1.31,3.13
+empty,48,10,10,5.26,2.62,6.98
+person,0,85,27,0.91,0.35,1.86
+person,48,85,30,0.74,0.14,2.44
