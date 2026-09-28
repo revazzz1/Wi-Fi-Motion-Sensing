@@ -10,3 +10,6 @@ AI_USAGE.md
 .idea/
 __pycache__/
 .ipynb_checkpoints/
+
+# raw dataset archive
+*.zip
