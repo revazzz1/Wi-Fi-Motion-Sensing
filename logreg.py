@@ -13,8 +13,9 @@ import warnings
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (balanced_accuracy_score, confusion_matrix, f1_score,
+from sklearn.metrics import (balanced_accuracy_score, confusion_matrix, f1_score, log_loss,
                              precision_score, recall_score, roc_auc_score)
+from sklearn.utils.class_weight import compute_sample_weight
 
 # numpy 2.0 + macOS Accelerate raises spurious "encountered in matmul" warnings (results are unaffected)
 warnings.filterwarnings("ignore", message=".*encountered in matmul")
@@ -199,23 +200,76 @@ weight_summary(final_median, "median")
 weight_summary(final_change, "change")
 
 
-# ---------- evaluate (confusion matrix, TPR, TNR, precision, F1, ROC/AUC) ----------
-y_pred = final_change.predict(X_test_change_standardised)
-score_change = balanced_accuracy_score(y_test_change, y_pred)
-y_prob = final_change.predict_proba(X_test_change_standardised)[:, 1]   # P(person present), for ROC-AUC
+# ---------- IQR-only model (ablation: does the second statistic add anything?) ----------
+# Both feature sets start with the same 47 IQR columns, so the IQR-only features are just the first
+# 47 columns; slicing the already-standardised arrays gives the same result as standardising them alone.
+X_train_iqr_standardised = X_train_change_standardised[:, :47]
+X_val_iqr_standardised   = X_val_change_standardised[:, :47]
+X_test_iqr_standardised  = X_test_change_standardised[:, :47]
+
+best_C_iqr = tune_C(X_train_iqr_standardised, y_train_change, X_val_iqr_standardised, y_val_change, "iqr")
+final_iqr = final_model(X_train_iqr_standardised, y_train_change, best_C_iqr)
+
+for part, X, y in (("val", X_val_iqr_standardised, y_val_change), ("test", X_test_iqr_standardised, y_test_change)):
+    pred = final_iqr.predict(X)
+    tn, fp, fn, tp = confusion_matrix(y, pred, labels=[0, 1]).ravel()
+    print(f"iqr     {part:4s}  accuracy = {np.mean(pred == y):.4f}   balanced accuracy = {balanced_accuracy_score(y, pred):.4f}"
+          f"   false alarms = {fp}/{tn + fp}   missed = {fn}/{fn + tp}")
+print()
+
+
+# ---------- Training / validation / test errors (for the Results section) ----------
+# Two error measures, the same for every set:
+#   log loss       = class-weighted logistic loss, the loss the model is trained on (data term only, no regularisation)
+#   balanced error = 1 - balanced accuracy, the 0/1 error averaged per class (fair under the 8.5 : 1 imbalance)
+# The final method is chosen from the train/val rows; only the chosen model's test row goes into the report as its test error.
+
+def report_errors(model, sets, name):
+    """sets: dict like {"train": (X, y), "val": (X, y), "test": (X, y)}, X already standardised."""
+    for part, (X, y) in sets.items():
+        weights = compute_sample_weight("balanced", y)   # one weight per window: empty ~4.75, person ~0.56
+        p = model.predict_proba(X)[:, 1]                 # predicted probability of "person"
+        loss = log_loss(y, p, sample_weight=weights)
+        b_err = 1 - balanced_accuracy_score(y, model.predict(X))
+        print(f"{name:6s} {part:5s}  log loss = {loss:.4f}   balanced error = {b_err:.4f}")
+    print()
+
+
+report_errors(final_median, {"train": (X_train_median_standardised, y_train_median),
+                             "val":   (X_val_median_standardised,   y_val_median),
+                             "test":  (X_test_median_standardised,  y_test_median)}, "median")
+report_errors(final_change, {"train": (X_train_change_standardised, y_train_change),
+                             "val":   (X_val_change_standardised,   y_val_change),
+                             "test":  (X_test_change_standardised,  y_test_change)}, "change")
+report_errors(final_iqr,    {"train": (X_train_iqr_standardised,    y_train_change),
+                             "val":   (X_val_iqr_standardised,      y_val_change),
+                             "test":  (X_test_iqr_standardised,     y_test_change)}, "iqr")
+
+
+# ---------- evaluate the FINAL model on the test set (confusion matrix, TPR, TNR, precision, F1, ROC/AUC) ----------
+# Final choice, made on validation only: all three LR models tie at 0 validation balanced error, the CNN has 0.0008,
+# and among the tied models the simplest one is chosen -> LR_IQR (47 IQR features, 48 parameters).
+# The windows and labels are the same for every feature set, so y_test_change is the test label array.
+final_model_chosen, X_test_chosen, y_test = final_iqr, X_test_iqr_standardised, y_test_change
+
+y_pred = final_model_chosen.predict(X_test_chosen)
+y_prob = final_model_chosen.predict_proba(X_test_chosen)[:, 1]          # P(person present), for ROC-AUC
+score = balanced_accuracy_score(y_test, y_pred)
 
 # confusion_matrix rows = true class, columns = predicted class, in label order [0 = empty, 1 = person]
-tn, fp, fn, tp = confusion_matrix(y_test_change, y_pred, labels=[0, 1]).ravel()
+tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0, 1]).ravel()
 
-print("\n=== Test set, final model: 'change' features, C =", best_C_change, "===")
-print(f"windows: {len(y_test_change)}  (empty {np.sum(y_test_change == 0)}, person {np.sum(y_test_change == 1)})")
+print("\n=== Test set, final model: LR_IQR (IQR features only), C =", best_C_iqr, "===")
+print(f"windows: {len(y_test)}  (empty {np.sum(y_test == 0)}, person {np.sum(y_test == 1)})")
 print("confusion matrix (rows = true, columns = predicted):")
 print(f"                 pred empty  pred person")
 print(f"  true empty     {tn:10d}  {fp:11d}   <- FP = false alarms")
 print(f"  true person    {fn:10d}  {tp:11d}   <- FN = missed intruders")
-print(f"TPR (recall, person detected)       = {recall_score(y_test_change, y_pred, pos_label=1):.3f}")
-print(f"TNR (empty correctly left alone)     = {recall_score(y_test_change, y_pred, pos_label=0):.3f}")
-print(f"precision (alarms that were real)    = {precision_score(y_test_change, y_pred, pos_label=1, zero_division=0):.3f}")
-print(f"F1 (person class)                    = {f1_score(y_test_change, y_pred, pos_label=1, zero_division=0):.3f}")
-print(f"balanced accuracy = (TPR + TNR) / 2  = {score_change:.3f}")
-print(f"ROC-AUC                              = {roc_auc_score(y_test_change, y_prob):.3f}")
+print(f"TPR (recall, person detected)       = {recall_score(y_test, y_pred, pos_label=1):.3f}")
+print(f"TNR (empty correctly left alone)     = {recall_score(y_test, y_pred, pos_label=0):.3f}")
+print(f"precision (alarms that were real)    = {precision_score(y_test, y_pred, pos_label=1, zero_division=0):.3f}")
+print(f"F1 (person class)                    = {f1_score(y_test, y_pred, pos_label=1, zero_division=0):.3f}")
+print(f"balanced accuracy = (TPR + TNR) / 2  = {score:.3f}")
+print(f"balanced error = 1 - balanced acc.   = {1 - score:.4f}")
+print(f"test log loss (class-weighted)       = {log_loss(y_test, y_prob, sample_weight=compute_sample_weight('balanced', y_test)):.4f}")
+print(f"ROC-AUC                              = {roc_auc_score(y_test, y_prob):.3f}")
